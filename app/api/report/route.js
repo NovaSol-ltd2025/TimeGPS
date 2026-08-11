@@ -86,23 +86,47 @@ export async function GET(request) {
       }
     }
 
+    const timeFmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+
     const report = Object.keys(byEmployee).map((empId) => {
       const emp = byEmployee[empId];
-      const dateKeys = Object.keys(emp.days);
+      const dateKeys = Object.keys(emp.days).sort(); // yyyy-mm-dd sorts chronologically
       let totalHours = 0;
       let incompleteDays = 0;
       let inCount = 0;
       let outCount = 0;
 
-      dateKeys.forEach((d) => {
+      // Per-day breakdown so admin can see exactly which dates were worked
+      // (e.g. to catch a clock-in mistakenly logged on a holiday) instead
+      // of only a total-day count.
+      const dailyBreakdown = dateKeys.map((d) => {
         const rec = emp.days[d];
         if (rec.inTime) inCount++;
         if (rec.outTime) outCount++;
-        if (rec.inTime && rec.outTime && rec.outTime > rec.inTime) {
-          totalHours += (rec.outTime.getTime() - rec.inTime.getTime()) / (1000 * 60 * 60);
+        const complete = !!(rec.inTime && rec.outTime && rec.outTime > rec.inTime);
+        let hours = null;
+        if (complete) {
+          hours = (rec.outTime.getTime() - rec.inTime.getTime()) / (1000 * 60 * 60);
+          totalHours += hours;
+          hours = Math.round(hours * 100) / 100;
         } else {
           incompleteDays++;
         }
+        const [y, m, day] = d.split('-');
+        return {
+          date: d,
+          dateLabel: `${day}/${m}/${y}`,
+          inTime: rec.inTime ? timeFmt.format(rec.inTime) : null,
+          outTime: rec.outTime ? timeFmt.format(rec.outTime) : null,
+          hours,
+          complete
+        };
       });
 
       return {
@@ -113,7 +137,8 @@ export async function GET(request) {
         totalHours: Math.round(totalHours * 100) / 100,
         inCount,
         outCount,
-        incompleteDays
+        incompleteDays,
+        dailyBreakdown
       };
     });
 
