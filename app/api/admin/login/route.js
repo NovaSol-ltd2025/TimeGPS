@@ -1,24 +1,40 @@
 import { NextResponse } from 'next/server';
+import bcrypt from 'bcryptjs';
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
+import { createSessionToken, sessionCookieHeader } from '../../../../lib/adminSession';
 
 export async function POST(request) {
   try {
     const body = await request.json();
+    const email = (body.email || '').toString().trim().toLowerCase();
     const password = (body.password || '').toString();
 
-    if (!process.env.ADMIN_PASSWORD) {
-      return NextResponse.json({
-        status: 'error',
-        message: 'ยังไม่ได้ตั้งค่า ADMIN_PASSWORD บนเซิร์ฟเวอร์ (ตัวแปรสภาพแวดล้อมของ Vercel)'
-      });
+    if (!email || !password) {
+      return NextResponse.json({ status: 'error', message: 'กรุณากรอกอีเมลและรหัสผ่าน' });
     }
 
-    if (password === process.env.ADMIN_PASSWORD) {
-      return NextResponse.json({ status: 'success' });
+    const { data: admin, error } = await supabaseAdmin
+      .from('admin_users')
+      .select('*')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    // Compare against a fixed dummy hash even when the account doesn't
+    // exist, so responses take similar time either way (avoids leaking
+    // which emails are registered via response timing).
+    const hashToCompare = admin ? admin.password_hash : '$2a$10$CwTycUXWue0Thq9StjUM0uJ8Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5';
+    const passwordMatches = await bcrypt.compare(password, hashToCompare);
+
+    if (!admin || !passwordMatches) {
+      return NextResponse.json({ status: 'error', message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
     }
-    return NextResponse.json({
-      status: 'error',
-      message: 'รหัสผ่านผู้ดูแลระบบไม่ถูกต้อง กรุณาตรวจสอบและลองใหม่อีกครั้ง'
-    });
+
+    const token = createSessionToken({ id: admin.id, email: admin.email });
+    const response = NextResponse.json({ status: 'success', email: admin.email });
+    response.headers.set('Set-Cookie', sessionCookieHeader(token));
+    return response;
   } catch (err) {
     return NextResponse.json(
       { status: 'error', message: 'ข้อผิดพลาดหลังบ้าน: ' + err.message },

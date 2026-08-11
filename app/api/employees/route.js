@@ -1,8 +1,6 @@
-export const dynamic = 'force-dynamic';
-
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
-import { isAdminAuthorized } from '../../../lib/utils';
+import { isAdminAuthorized } from '../../../lib/adminSession';
 
 export async function GET(request) {
   if (!isAdminAuthorized(request)) {

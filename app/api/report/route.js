@@ -1,8 +1,7 @@
-export const dynamic = 'force-dynamic';
-
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
-import { isAdminAuthorized, formatBangkokDateTime } from '../../../lib/utils';
+import { formatBangkokDateTime } from '../../../lib/utils';
+import { isAdminAuthorized } from '../../../lib/adminSession';
 
 const MONTH_NAMES_TH = [
   '',

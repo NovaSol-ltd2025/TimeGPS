@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
-import { isAdminAuthorized } from '../../../../lib/utils';
+import { isAdminAuthorized } from '../../../../lib/adminSession';
 
 export async function DELETE(request, { params }) {
   if (!isAdminAuthorized(request)) {

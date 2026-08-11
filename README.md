@@ -1,57 +1,46 @@
 # TimeGPS Pro — Supabase + Vercel edition
 
-This is the original Google Apps Script attendance app, ported to:
+Originally a Google Apps Script attendance app, now running on:
 
-- **Database & file storage:** Supabase (Postgres + Storage, replacing the
-  Google Sheet and Google Drive folder)
-- **Backend:** Next.js API routes (`app/api/*`, replacing `doPost` / `doGet`
-  in `Code.gs`) — runs as Vercel Serverless Functions
-- **Frontend:** the same single-page UI (`public/index.html`), with its
-  `fetch()` calls pointed at the new `/api/*` routes instead of a Google
-  Apps Script web app URL
+- **Database & file storage:** Supabase (Postgres + Storage)
+- **Backend:** Next.js API routes (`app/api/*`) — deployed as Vercel
+  Serverless Functions
+- **Frontend:** the same single-page UI (`public/index.html`)
+- **Admin auth:** a real login (email + password) backed by an
+  `admin_users` table and signed HttpOnly session cookies — not a shared
+  password typed into the page
+- **Worker self-service:** a "ประวัติของฉัน" (my history) tab where any
+  employee can look up their *own* attendance record with their emp ID +
+  PIN — the API re-verifies the PIN on every request and only ever returns
+  rows for that emp ID, so one worker can never see another's history
 
-Nothing about the look, the Thai copy, the camera/GPS/QR/print flows, or the
-admin panel changed — only where the data lives and how the browser talks to
-the backend.
+## Already done for you
 
-## 1. Create the Supabase project
+The Supabase project (`TimeGPSv1.0`, ref `dslhehnsvaeogrffwbpn`) already
+has:
+- ✅ `employees`, `locations`, `attendance`, `admin_users` tables (RLS on)
+- ✅ `selfies` public storage bucket
+- ✅ Seed data: demo employee `1001` and location `LOC_BANGKOK`
+- ✅ One admin account: `novasolltd2025@gmail.com`
 
-1. Go to [supabase.com](https://supabase.com) → New project.
-2. Open **SQL Editor** → New query → paste the contents of
-   `supabase-schema.sql` from this repo → Run.
-   This creates the `employees`, `locations`, and `attendance` tables (with
-   the same demo seed row the original script created automatically), and
-   enables Row Level Security so the public/anon key can't read or write
-   them directly.
-3. Open **Storage** → New bucket → name it exactly `selfies` → toggle
-   **Public bucket** ON → Create. This replaces the `Attendance_Selfies_Pro`
-   Google Drive folder; the API uploads selfies here and stores the public
-   URL in the `attendance.photo_url` column.
-4. Open **Project Settings → API** and copy:
-   - **Project URL** → `SUPABASE_URL`
-   - **service_role** secret key → `SUPABASE_SERVICE_ROLE_KEY`
+## 1. Set environment variables
 
-   The service role key is only ever used inside the server-side API
-   routes (`lib/supabaseAdmin.js`) — it is never sent to the browser. All
-   reads/writes go through your own `/api/*` endpoints, which is why RLS is
-   enabled with no public policies: the anon key genuinely cannot touch
-   these tables, and your API is the only door in.
-
-## 2. Configure environment variables
-
-Copy `.env.local.example` to `.env.local` for local dev, and fill in:
+Copy `.env.local.example` to `.env.local` for local dev (or set these
+directly in Vercel → Project Settings → Environment Variables):
 
 ```
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
-ADMIN_PASSWORD=...
+SUPABASE_URL=https://dslhehnsvaeogrffwbpn.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...   # Project Settings → API → service_role secret
+ADMIN_SESSION_SECRET=...        # any long random string, e.g. `openssl rand -base64 32`
 ```
 
-`ADMIN_PASSWORD` replaces the `ADMIN_PASSWORD` constant that used to be
-hard-coded at the top of `Code.gs`. Pick a strong one — anyone who knows it
-can add/edit/delete employees and locations and pull attendance reports.
+`SUPABASE_SERVICE_ROLE_KEY` is only ever read inside server-side API routes
+(`lib/supabaseAdmin.js`) — it's never sent to the browser.
 
-## 3. Run locally (optional)
+`ADMIN_SESSION_SECRET` signs the admin login session cookie. It is
+*different* from any Supabase key — treat it as its own secret.
+
+## 2. Run locally (optional)
 
 ```bash
 npm install
@@ -60,38 +49,49 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-## 4. Deploy to Vercel
+## 3. Deploy to Vercel
 
-1. Push this folder to a GitHub repo (or run `vercel` from inside it with
-   the [Vercel CLI](https://vercel.com/docs/cli)).
-2. In the Vercel dashboard: **New Project** → import the repo → it will
-   auto-detect Next.js, no build settings to change.
-3. Under **Environment Variables**, add the same three variables as in
-   `.env.local.example` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `ADMIN_PASSWORD`) for the Production (and Preview) environments.
-4. Deploy. Your app is now live at `https://your-project.vercel.app`.
+1. Push this folder to a GitHub repo.
+2. Vercel dashboard → **New Project** → import the repo (auto-detects
+   Next.js, no build config needed).
+3. Add the three environment variables from step 1 under **Environment
+   Variables** (Production + Preview).
+4. Deploy.
+
+## Managing admin accounts
+
+There's no self-service admin signup screen on purpose — a stranger should
+never be able to create their own admin account. To add another admin,
+run this in the Supabase SQL Editor (generate the hash locally first, e.g.
+`node -e "console.log(require('bcryptjs').hashSync('their-password', 10))"`):
+
+```sql
+insert into admin_users (email, password_hash)
+values ('someone@example.com', '<bcrypt hash>');
+```
+
+To remove one: `delete from admin_users where email = '...';`
 
 ## How the QR-code check-in flow works (unchanged)
 
-Same as the original: from **จัดการระบบ → สร้างป้ายสแกน QR Code**, pick a
-saved location and print the label. The QR code encodes your site's own URL
-with `?lat=...&lng=...&loc=...&r=...` query params — scanning it opens the
-attendance page pre-loaded with that location's coordinates and allowed
-radius, exactly as before.
+From **จัดการระบบ → สร้างป้ายสแกน QR Code**, pick a saved location and print
+the label. The QR code encodes your site's own URL with
+`?lat=...&lng=...&loc=...&r=...` — scanning it opens the attendance page
+pre-loaded with that location's coordinates and allowed radius.
 
-## What changed under the hood
+## Architecture summary
 
-| Original (Google Apps Script) | This version |
+| Concern | Implementation |
 |---|---|
-| Google Sheet (`Employees`, `Locations`, `Attendance` tabs) | Supabase Postgres tables (`employees`, `locations`, `attendance`) |
-| Google Drive folder for selfies | Supabase Storage bucket `selfies` |
-| `doPost(e)` single endpoint with an `action` field | REST-style routes under `app/api/*` |
-| `ADMIN_PASSWORD` constant in `Code.gs` | `ADMIN_PASSWORD` environment variable, checked per-request via an `x-admin-password` header |
-| Deployed as a GAS Web App | Deployed as a Vercel project (serverless functions + static HTML) |
+| Employee/location/attendance data | Supabase Postgres |
+| Selfie photos | Supabase Storage bucket `selfies` |
+| Admin login | `admin_users` table (bcrypt hash) + signed HttpOnly cookie session (`lib/adminSession.js`) |
+| Admin-only routes | `employees`, `locations`, `report` APIs check the session cookie via `isAdminAuthorized()` |
+| Worker's own history | `/api/my-attendance` — re-verifies PIN, scopes query to that emp ID only |
+| Hosting | Vercel (serverless functions + static HTML) |
 
 ## A note on the selfie upload size
 
 Vercel's default serverless function request-body limit (4.5 MB on most
 plans) comfortably fits the JPEG selfies this app captures (a 640×480 canvas
-at quality 0.85 is typically well under 200 KB), so no extra configuration
-is needed for normal use.
+at quality 0.85 is typically well under 200 KB).

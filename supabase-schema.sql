@@ -34,6 +34,19 @@ create table if not exists attendance (
 create index if not exists attendance_emp_id_idx on attendance (emp_id);
 create index if not exists attendance_created_at_idx on attendance (created_at);
 
+-- Admin accounts for the real login page (app/api/admin/login). Passwords
+-- are hashed with bcrypt in the Next.js API route before being stored here
+-- — this table never holds a plaintext password. There is deliberately no
+-- self-service signup route; admins are added by an existing admin (via
+-- SQL, or a future "add admin" screen) so a stranger can never create
+-- their own admin account.
+create table if not exists admin_users (
+  id            uuid primary key default gen_random_uuid(),
+  email         text not null unique,
+  password_hash text not null,
+  created_at    timestamptz not null default now()
+);
+
 -- Seed data matching the original demo defaults (safe to skip/edit)
 insert into employees (emp_id, name, department, pin, status)
 values ('1001', 'กิตติศักดิ์ มีสุข', 'ฝ่ายปฏิบัติการ สาขาสีลม', '1234', 'Active')
