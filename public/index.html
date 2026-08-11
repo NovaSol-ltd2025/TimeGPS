@@ -543,6 +543,42 @@
     </div>
   </div>
 
+  <!-- ⏱️ ฟอร์มแก้ไขประวัติการลงเวลา Modal -->
+  <div id="att-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl border">
+      <h3 class="font-bold text-slate-800 text-base">แก้ไขรายการลงเวลา</h3>
+      <p id="att-modal-emp" class="text-xs text-slate-500 -mt-2"></p>
+      <div class="space-y-3 text-xs">
+        <input type="hidden" id="m-att-id">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold text-slate-500 mb-1">วันที่</label>
+            <input type="date" id="m-att-date" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:border-amber-500">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-500 mb-1">เวลา</label>
+            <input type="time" id="m-att-time" step="1" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:border-amber-500">
+          </div>
+        </div>
+        <div>
+          <label class="block font-bold text-slate-500 mb-1">ประเภท</label>
+          <select id="m-att-type" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:border-amber-500">
+            <option value="เข้างาน">เข้างาน</option>
+            <option value="ออกงาน">ออกงาน</option>
+          </select>
+        </div>
+        <div>
+          <label class="block font-bold text-slate-500 mb-1">สถานที่</label>
+          <input type="text" id="m-att-loc" placeholder="เช่น War Room" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:border-amber-500">
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="closeAttendanceEditModal()" class="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition">ยกเลิก</button>
+        <button onclick="submitAttendanceEdit()" class="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl transition">บันทึกการแก้ไข</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 🛑 กล่องตอบรับยืนยันทำรายการ -->
   <div id="confirm-modal" class="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 hidden">
     <div class="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl border text-center">
@@ -1248,7 +1284,8 @@
                   <p class="text-slate-700">${rec.location || '-'}</p>
                   <p class="text-xs text-slate-400">${rec.distance != null ? 'ระยะห่าง: ' + rec.distance + ' ม.' : ''}</p>
                 </td>
-                <td class="p-3 text-center">
+                <td class="p-3 text-center whitespace-nowrap space-x-1">
+                  <button onclick='openAttendanceEditModal(${JSON.stringify(rec).replace(/'/g, "&#39;")})' class="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold rounded-lg transition"><i class="ph ph-note-pencil"></i> แก้ไข</button>
                   <button onclick="confirmDeleteAttendance(${rec.id}, '${rec.date}', '${rec.time}')" class="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold rounded-lg transition"><i class="ph ph-trash"></i> ลบ</button>
                 </td>
               </tr>
@@ -1277,6 +1314,55 @@
         let result = await response.json();
         if (result.status === 'success') {
           showToast(result.message, "success");
+          loadAttendanceRecords();
+          loadDashboardData();
+        } else {
+          showToast(result.message, "error");
+        }
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
+    }
+
+    // Opens the edit modal pre-filled with the record's current date, time,
+    // type, and location — so admin can correct a mistaken entry (wrong
+    // time, wrong in/out type) instead of only being able to delete it.
+    function openAttendanceEditModal(rec) {
+      document.getElementById('m-att-id').value = rec.id;
+      document.getElementById('m-att-date').value = rec.dateInput;
+      document.getElementById('m-att-time').value = rec.time;
+      document.getElementById('m-att-type').value = rec.type;
+      document.getElementById('m-att-loc').value = rec.location || '';
+      document.getElementById('att-modal-emp').textContent = `รหัส: ${rec.empId} • ${rec.name} • ${rec.department}`;
+      document.getElementById('att-modal').classList.remove('hidden');
+    }
+
+    function closeAttendanceEditModal() {
+      document.getElementById('att-modal').classList.add('hidden');
+    }
+
+    async function submitAttendanceEdit() {
+      const id = document.getElementById('m-att-id').value;
+      const date = document.getElementById('m-att-date').value;
+      const time = document.getElementById('m-att-time').value;
+      const type = document.getElementById('m-att-type').value;
+      const locName = document.getElementById('m-att-loc').value.trim();
+
+      if (!date || !time) {
+        showToast("กรุณาระบุวันที่และเวลาให้ครบถ้วน", "error");
+        return;
+      }
+
+      try {
+        let response = await fetch(API_BASE + '/attendance/' + id, {
+          method: 'PUT',
+          headers: jsonHeaders,
+          body: JSON.stringify({ date, time, type, locName })
+        });
+        let result = await response.json();
+        if (result.status === 'success') {
+          showToast(result.message, "success");
+          closeAttendanceEditModal();
           loadAttendanceRecords();
           loadDashboardData();
         } else {

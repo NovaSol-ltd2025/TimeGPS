@@ -55,6 +55,12 @@ export async function GET(request) {
           month: '2-digit',
           year: 'numeric'
         }).format(d),
+        dateInput: new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Bangkok',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(d),
         time: new Intl.DateTimeFormat('en-GB', {
           timeZone: 'Asia/Bangkok',
           hour: '2-digit',
