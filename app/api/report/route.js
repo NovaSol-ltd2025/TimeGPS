@@ -3,6 +3,10 @@ import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 import { formatBangkokDateTime } from '../../../lib/utils';
 import { isAdminAuthorized } from '../../../lib/adminSession';
 
+// Always run this route dynamically — never statically cache the response,
+// since attendance/employee data changes on every request.
+export const dynamic = 'force-dynamic';
+
 const MONTH_NAMES_TH = [
   '',
   'มกราคม',

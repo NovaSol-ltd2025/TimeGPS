@@ -444,6 +444,35 @@
             </div>
           </div>
         </div>
+
+        <div class="lg:col-span-3 bg-white rounded-2xl p-6 border border-slate-100 shadow-sm space-y-4">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b pb-2">
+            <div>
+              <h4 class="font-bold text-slate-800"><i class="ph-bold ph-magnifying-glass text-amber-500 mr-1"></i> ตรวจสอบ/ลบข้อมูลลงเวลารายวัน</h4>
+              <p class="text-xs text-slate-400 mt-1">ใช้ตัวกรอง "ปี / เดือน / สาขา-แผนก" ในกล่องรายงานด้านซ้ายมือ แล้วกด "ค้นหา" ด้านล่างเพื่อดูบันทึกลงเวลาแยกเป็นรายวัน หากพบรายการที่ไม่ถูกต้อง (เช่น ลงเวลาในวันหยุด) สามารถกดลบรายการนั้นทิ้งได้ทันที</p>
+            </div>
+            <button onclick="loadAttendanceRecords()" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition whitespace-nowrap"><i class="ph ph-magnifying-glass"></i> ค้นหา (ตามตัวกรองรายงาน)</button>
+          </div>
+
+          <div class="overflow-x-auto max-h-96 overflow-y-auto border border-slate-100 rounded-xl">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="bg-slate-50 text-slate-400 font-bold border-b border-slate-100 sticky top-0">
+                  <th class="p-3">วันที่</th>
+                  <th class="p-3">เวลา</th>
+                  <th class="p-3">รหัส/ชื่อพนักงาน</th>
+                  <th class="p-3">แผนก</th>
+                  <th class="p-3 text-center">ประเภท</th>
+                  <th class="p-3">สถานที่ / ระยะห่าง</th>
+                  <th class="p-3 text-center">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody id="admin-attendance-table" class="divide-y divide-slate-100">
+                <tr><td colspan="7" class="p-4 text-center text-slate-400">เลือกปี/เดือนในกล่อง "รายงานประจำเดือน" ด้านบนซ้าย แล้วกด "ค้นหา" เพื่อดึงข้อมูล</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -966,7 +995,9 @@
             `;
           });
         }
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     async function loadMyHistory() {
@@ -1094,7 +1125,9 @@
         } else {
           showToast(result.message, "error");
         }
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     function openEmployeeModal() {
@@ -1149,7 +1182,9 @@
           closeEmployeeModal();
           loadAdminEmployeesList();
         } else showToast(result.message, "error");
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     function confirmDeleteEmployee(empId) {
@@ -1169,7 +1204,87 @@
         } else {
           showToast(result.message, "error");
         }
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
+    }
+
+    // Reads the same year/month/department filters used for the printed
+    // monthly report, but returns each individual attendance row instead of
+    // just totals — so admin can spot and remove an incorrect clock-in
+    // (e.g. one logged on a holiday) before it inflates payroll.
+    async function loadAttendanceRecords() {
+      const year = document.getElementById('report-year').value;
+      const month = document.getElementById('report-month').value;
+      const dept = document.getElementById('report-dept').value;
+      const tbody = document.getElementById('admin-attendance-table');
+      tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-400">กำลังดึงข้อมูล...</td></tr>`;
+
+      try {
+        const qs = new URLSearchParams({ month, year, department: dept }).toString();
+        let response = await fetch(API_BASE + '/attendance?' + qs, { headers: jsonHeaders });
+        let result = await response.json();
+
+        if (result.status === 'success') {
+          if (result.records.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-400">ไม่พบบันทึกลงเวลาในเดือน/สาขาที่เลือก</td></tr>`;
+            return;
+          }
+          tbody.innerHTML = '';
+          result.records.forEach((rec) => {
+            const isIN = rec.type === 'เข้างาน';
+            const badgeClass = isIN ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800";
+            tbody.innerHTML += `
+              <tr>
+                <td class="p-3 font-semibold text-slate-800 whitespace-nowrap">${rec.date}</td>
+                <td class="p-3 tabular-nums whitespace-nowrap">${rec.time}</td>
+                <td class="p-3">
+                  <p class="font-semibold text-slate-700">${rec.name}</p>
+                  <p class="text-xs text-slate-400">รหัส: ${rec.empId}</p>
+                </td>
+                <td class="p-3 text-slate-600">${rec.department}</td>
+                <td class="p-3 text-center"><span class="px-2.5 py-1 rounded-full text-xs font-bold ${badgeClass}">${rec.type}</span></td>
+                <td class="p-3">
+                  <p class="text-slate-700">${rec.location || '-'}</p>
+                  <p class="text-xs text-slate-400">${rec.distance != null ? 'ระยะห่าง: ' + rec.distance + ' ม.' : ''}</p>
+                </td>
+                <td class="p-3 text-center">
+                  <button onclick="confirmDeleteAttendance(${rec.id}, '${rec.date}', '${rec.time}')" class="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold rounded-lg transition"><i class="ph ph-trash"></i> ลบ</button>
+                </td>
+              </tr>
+            `;
+          });
+        } else {
+          showToast(result.message, "error");
+          tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-400">${result.message}</td></tr>`;
+        }
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+        tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-400">เกิดข้อผิดพลาดในการเชื่อมต่อ</td></tr>`;
+      }
+    }
+
+    function confirmDeleteAttendance(id, date, time) {
+      showConfirm("ยืนยันการลบรายการลงเวลา", `ลบบันทึกวันที่ ${date} เวลา ${time} นี้ใช่หรือไม่? การลบนี้ย้อนกลับไม่ได้`, () => executeDeleteAttendance(id));
+    }
+
+    async function executeDeleteAttendance(id) {
+      try {
+        let response = await fetch(API_BASE + '/attendance/' + id, {
+          method: 'DELETE',
+          headers: jsonHeaders
+        });
+        let result = await response.json();
+        if (result.status === 'success') {
+          showToast(result.message, "success");
+          loadAttendanceRecords();
+          loadDashboardData();
+        } else {
+          showToast(result.message, "error");
+        }
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     async function loadAdminLocationsList() {
@@ -1204,7 +1319,9 @@
         } else {
           showToast(result.message, "error");
         }
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     function openLocationModal() {
@@ -1253,7 +1370,9 @@
           closeLocationModal();
           loadAdminLocationsList();
         } else showToast(result.message, "error");
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     function confirmDeleteLocation(locId) { showConfirm("ลบสาขา?", "ลบพิกัดนี้หรือไม่?", () => executeDeleteLocation(locId)); }
@@ -1267,7 +1386,9 @@
         let result = await response.json();
         if (result.status === 'success') { showToast(result.message, "success"); loadAdminLocationsList(); }
         else { showToast(result.message, "error"); }
-      } catch (err) {}
+      } catch (err) {
+        showToast("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + err.message, "error");
+      }
     }
 
     // ==========================================

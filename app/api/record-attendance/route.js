@@ -3,6 +3,10 @@ import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 import { verifyEmployee } from '../../../lib/employee';
 import { distanceMeters, formatBangkokDateTime } from '../../../lib/utils';
 
+// Always run this route dynamically — never statically cache the response,
+// since attendance/employee data changes on every request.
+export const dynamic = 'force-dynamic';
+
 const SELFIE_BUCKET = 'selfies';
 
 async function uploadSelfie(base64Data, empId) {
