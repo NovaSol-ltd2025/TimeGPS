@@ -660,8 +660,10 @@
         document.getElementById('attendance-form').style.display = 'none';
       }
 
-      tickClock();
-      setInterval(tickClock, 1000);
+      renderClock();
+      setInterval(renderClock, 1000);
+      syncServerTime();
+      setInterval(syncServerTime, 5 * 60 * 1000); // re-sync ทุก 5 นาที เผื่อนาฬิกาเครื่อง user เพี้ยน
       loadDashboardData();
     };
 
@@ -761,20 +763,34 @@
       if (viewName === 'dashboard') loadDashboardData();
     }
 
-    async function tickClock() {
+    // ผลต่าง (ms) ระหว่างเวลา server กับนาฬิกาเครื่อง user — เริ่มที่ 0 (เชื่อ
+    // เวลาเครื่อง user ไปก่อน) แล้วจะแม่นขึ้นทันทีที่ syncServerTime()
+    // เรียกสำเร็จครั้งแรก
+    let serverTimeOffsetMs = 0;
+
+    // เรียก /api/server-time เพื่อคำนวณ offset — ตั้งใจให้เรียกไม่บ่อย (ตอนโหลด
+    // หน้าเว็บ + ซ้ำทุง 5 นาที ดู setInterval ใน window.onload) ต่างจากโค้ดเดิม
+    // ที่เรียกทุกวินาทีตลอดเวลาที่เปิดหน้าเว็บทิ้งไว้ (แอปนี้มักเปิดค้างแบบ
+    // kiosk ที่จุดสแกน ทำให้ยิง request เกินจำเป็นวันละหลายหมื่นครั้งต่อเครื่อง)
+    async function syncServerTime() {
       try {
         let response = await fetch(API_BASE + '/server-time');
         let result = await response.json();
-        if (result.status === 'success') {
-          let parts = result.time.split(' ');
-          document.getElementById('clock').innerText = parts[1];
-          document.getElementById('clockDate').innerText = parts[0];
+        if (result.status === 'success' && typeof result.nowMs === 'number') {
+          serverTimeOffsetMs = result.nowMs - Date.now();
         }
       } catch (e) {
-        let d = new Date();
-        document.getElementById('clock').innerText = d.toLocaleTimeString('th-TH');
-        document.getElementById('clockDate').innerText = d.toLocaleDateString('th-TH');
+        // เชื่อมต่อไม่ได้ — ปล่อยให้ใช้ offset เดิม (หรือ 0 ถ้ายังไม่เคย sync
+        // สำเร็จเลย) นาฬิกาบนจอจะยังเดินต่อด้วยเวลาเครื่อง user
       }
+    }
+
+    // วาดนาฬิกาบนจอจาก "เวลาเครื่อง user + offset ที่ sync ไว้ล่าสุด" — ไม่มี
+    // การยิง network request ในฟังก์ชันนี้เลย เรียกได้ถี่ทุกวินาทีอย่างปลอดภัย
+    function renderClock() {
+      const d = new Date(Date.now() + serverTimeOffsetMs);
+      document.getElementById('clock').innerText = d.toLocaleTimeString('th-TH', { hour12: false });
+      document.getElementById('clockDate').innerText = d.toLocaleDateString('th-TH');
     }
 
     async function checkCameraCount() {
@@ -1631,10 +1647,10 @@
               days.forEach((day, idx) => {
                 rowsHtml += `
                   <tr style="page-break-inside: avoid; ${idx === 0 ? 'border-top: 2px solid #1e293b;' : ''}">
-                    <td style="padding: 8px; border: 1px solid #94a3b8; text-align: center; font-family: monospace; font-size: 12px;">${idx === 0 ? row.empId : ''}</td>                    
-                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; font-weight: 700; color: #1e293b; text-align: left; font-size: 12px; word-break: break-word;">${idx === 0 ? row.name : ''}</td>
-                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; text-align: left; color: #475569; font-size: 12px; word-break: break-word;">${idx === 0 ? row.department : ''}</td>
-                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; text-align: left; color: #475569; font-size: 12px; word-break: break-word;">${idx === 0 ? (row.branch || '-') : ''}</td>
+                    <td style="padding: 8px; border: 1px solid #94a3b8; text-align: center; font-family: monospace; font-size: 12px;">${idx === 0 ? row.empId : ''}</td>
+                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; font-weight: 700; color: #1e293b; text-align: left; font-size: 12px; white-space: nowrap;">${idx === 0 ? row.name : ''}</td>
+                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; text-align: left; color: #475569; font-size: 12px;">${idx === 0 ? row.department : ''}</td>
+                    <td style="padding: 8px 10px; border: 1px solid #94a3b8; text-align: left; color: #475569; font-size: 12px;">${idx === 0 ? (row.branch || '-') : ''}</td>
                     <td style="padding: 8px; border: 1px solid #94a3b8; text-align: center; font-weight: 600; font-size: 12px;">${day.dateLabel}</td>
                     <td style="padding: 8px; border: 1px solid #94a3b8; text-align: center; font-size: 12px;">${day.inTime || '-'}</td>
                     <td style="padding: 8px; border: 1px solid #94a3b8; text-align: center; font-size: 12px;">${day.outTime || '-'}</td>
