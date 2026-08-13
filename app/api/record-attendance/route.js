@@ -76,6 +76,7 @@ export async function POST(request) {
       emp_id: empId,
       name: verification.empName,
       department: verification.department,
+      branch: verification.branch || null,
       type: typeText,
       loc_name: params.locName,
       distance: Math.round(dist),

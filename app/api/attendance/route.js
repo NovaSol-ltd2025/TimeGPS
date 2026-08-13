@@ -18,6 +18,7 @@ export async function GET(request) {
     const month = parseInt(searchParams.get('month'), 10);
     const year = parseInt(searchParams.get('year'), 10);
     const deptFilter = (searchParams.get('department') || '').trim();
+    const branchFilter = (searchParams.get('branch') || '').trim();
     const empIdFilter = (searchParams.get('empId') || '').trim();
 
     if (!month || !year || month < 1 || month > 12) {
@@ -34,12 +35,13 @@ export async function GET(request) {
 
     let query = supabaseAdmin
       .from('attendance')
-      .select('id, created_at, emp_id, name, department, type, loc_name, distance')
+      .select('id, created_at, emp_id, name, department, branch, type, loc_name, distance')
       .gte('created_at', rangeStart.toISOString())
       .lt('created_at', rangeEnd.toISOString())
       .order('created_at', { ascending: false });
 
     if (deptFilter) query = query.eq('department', deptFilter);
+    if (branchFilter) query = query.eq('branch', branchFilter);
     if (empIdFilter) query = query.eq('emp_id', empIdFilter);
 
     const { data, error } = await query;
@@ -71,6 +73,7 @@ export async function GET(request) {
         empId: row.emp_id,
         name: row.name,
         department: row.department,
+        branch: row.branch || '',
         type: row.type,
         location: row.loc_name,
         distance: row.distance

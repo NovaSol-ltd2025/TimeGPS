@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 import { bangkokTodayRangeUtc } from '../../../lib/utils';
+import { isAdminAuthorized } from '../../../lib/adminSession';
 
 // Always run this route dynamically — never statically cache the response,
 // since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
+  }
   try {
     const [startIso, endIso] = bangkokTodayRangeUtc();
 

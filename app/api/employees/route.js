@@ -21,6 +21,7 @@ export async function GET(request) {
       empId: e.emp_id,
       name: e.name,
       department: e.department,
+      branch: e.branch || '',
       pin: e.pin,
       status: e.status
     }));
@@ -55,12 +56,15 @@ export async function POST(request) {
       ? emp.pin.toString().trim()
       : Math.floor(1000 + Math.random() * 9000).toString();
 
+    const branch = emp.branch ? emp.branch.toString().trim() : null;
+
     if (existing) {
       const { error } = await supabaseAdmin
         .from('employees')
         .update({
           name: emp.name,
           department: emp.department,
+          branch,
           pin,
           status: emp.status || 'Active'
         })
@@ -75,6 +79,7 @@ export async function POST(request) {
         emp_id: empId,
         name: emp.name,
         department: emp.department,
+        branch,
         pin,
         status: 'Active'
       });

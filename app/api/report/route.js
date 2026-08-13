@@ -23,23 +23,59 @@ const MONTH_NAMES_TH = [
   'ธันวาคม'
 ];
 
+// Builds [rangeStartUtc, rangeEndUtc] for either:
+//  - a single Bangkok calendar day (reportType === 'daily', uses `date` = yyyy-mm-dd), or
+//  - a whole Bangkok calendar month (reportType === 'monthly', uses `month` + `year`)
+function buildDateRange({ reportType, date, month, year }) {
+  if (reportType === 'daily') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error('กรุณาระบุวันที่ให้ถูกต้อง (yyyy-mm-dd)');
+    }
+    const rangeStart = new Date(`${date}T00:00:00+07:00`);
+    const rangeEnd = new Date(rangeStart.getTime() + 24 * 60 * 60 * 1000);
+    const [y, m, d] = date.split('-');
+    return {
+      rangeStart,
+      rangeEnd,
+      label: `วันที่ ${d}/${m}/${Number(y) + 543}`
+    };
+  }
+
+  if (!month || !year || month < 1 || month > 12) {
+    throw new Error('กรุณาระบุปีและเดือนให้ถูกต้อง');
+  }
+  const monthStr = month.toString().padStart(2, '0');
+  const rangeStart = new Date(`${year}-${monthStr}-01T00:00:00+07:00`);
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthYear = month === 12 ? year + 1 : year;
+  const nextMonthStr = nextMonth.toString().padStart(2, '0');
+  const rangeEnd = new Date(`${nextMonthYear}-${nextMonthStr}-01T00:00:00+07:00`);
+  return {
+    rangeStart,
+    rangeEnd,
+    label: `${MONTH_NAMES_TH[month]} ${year + 543}`
+  };
+}
+
 export async function GET(request) {
   if (!isAdminAuthorized(request)) {
     return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
   }
   try {
     const { searchParams } = new URL(request.url);
+    const reportType = (searchParams.get('reportType') || 'monthly').trim() === 'daily' ? 'daily' : 'monthly';
     const month = parseInt(searchParams.get('month'), 10);
     const year = parseInt(searchParams.get('year'), 10);
+    const date = (searchParams.get('date') || '').trim(); // yyyy-mm-dd, used when reportType === 'daily'
     const deptFilter = (searchParams.get('department') || '').trim();
+    const branchFilter = (searchParams.get('branch') || '').trim();
 
-    // Query the whole month in Bangkok local time, expressed as a UTC range.
-    const monthStr = month.toString().padStart(2, '0');
-    const rangeStart = new Date(`${year}-${monthStr}-01T00:00:00+07:00`);
-    const nextMonth = month === 12 ? 1 : month + 1;
-    const nextMonthYear = month === 12 ? year + 1 : year;
-    const nextMonthStr = nextMonth.toString().padStart(2, '0');
-    const rangeEnd = new Date(`${nextMonthYear}-${nextMonthStr}-01T00:00:00+07:00`);
+    let rangeStart, rangeEnd, periodLabel;
+    try {
+      ({ rangeStart, rangeEnd, label: periodLabel } = buildDateRange({ reportType, date, month, year }));
+    } catch (rangeErr) {
+      return NextResponse.json({ status: 'error', message: rangeErr.message }, { status: 400 });
+    }
 
     let query = supabaseAdmin
       .from('attendance')
@@ -49,6 +85,9 @@ export async function GET(request) {
 
     if (deptFilter) {
       query = query.eq('department', deptFilter);
+    }
+    if (branchFilter) {
+      query = query.eq('branch', branchFilter);
     }
 
     const { data, error } = await query;
@@ -71,6 +110,7 @@ export async function GET(request) {
           empId: row.emp_id,
           name: row.name,
           department: row.department,
+          branch: row.branch || '',
           days: {}
         };
       }
@@ -104,7 +144,8 @@ export async function GET(request) {
 
       // Per-day breakdown so admin can see exactly which dates were worked
       // (e.g. to catch a clock-in mistakenly logged on a holiday) instead
-      // of only a total-day count.
+      // of only a total-day count. For a daily report this array will
+      // contain exactly one entry.
       const dailyBreakdown = dateKeys.map((d) => {
         const rec = emp.days[d];
         if (rec.inTime) inCount++;
@@ -133,6 +174,7 @@ export async function GET(request) {
         empId: emp.empId,
         name: emp.name,
         department: emp.department,
+        branch: emp.branch,
         totalDays: dateKeys.length,
         totalHours: Math.round(totalHours * 100) / 100,
         inCount,
@@ -143,16 +185,21 @@ export async function GET(request) {
     });
 
     report.sort((a, b) => {
+      if (a.branch !== b.branch) return a.branch < b.branch ? -1 : 1;
       if (a.department !== b.department) return a.department < b.department ? -1 : 1;
       return a.name < b.name ? -1 : 1;
     });
 
     return NextResponse.json({
       status: 'success',
-      month,
-      year,
-      monthLabel: `${MONTH_NAMES_TH[month]} ${year + 543}`,
-      department: deptFilter || 'ทุกสาขา/แผนก',
+      reportType,
+      month: reportType === 'monthly' ? month : undefined,
+      year: reportType === 'monthly' ? year : undefined,
+      date: reportType === 'daily' ? date : undefined,
+      periodLabel,
+      monthLabel: periodLabel, // kept for backward compatibility with older frontends
+      department: deptFilter || 'ทุกแผนก',
+      branch: branchFilter || 'ทุกสาขา',
       generatedAt: formatBangkokDateTime(),
       rows: report
     });
