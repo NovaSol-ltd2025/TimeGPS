@@ -1,44 +1,65 @@
 import { NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
-import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
-import { createSessionToken, sessionCookieHeader } from '../../../../lib/adminSession';
+import { supabaseAdmin } from '../../../lib/supabaseAdmin';
+import { bangkokTodayRangeUtc } from '../../../lib/utils';
 
 // Always run this route dynamically — never statically cache the response,
 // since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
 
-export async function POST(request) {
+export async function GET() {
   try {
-    const body = await request.json();
-    const email = (body.email || '').toString().trim().toLowerCase();
-    const password = (body.password || '').toString();
+    const [startIso, endIso] = bangkokTodayRangeUtc();
 
-    if (!email || !password) {
-      return NextResponse.json({ status: 'error', message: 'กรุณากรอกอีเมลและรหัสผ่าน' });
-    }
+    const { count: totalEmployees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('*', { count: 'exact', head: true });
 
-    const { data: admin, error } = await supabaseAdmin
-      .from('admin_users')
+    const { data: logsRaw, error: logErr } = await supabaseAdmin
+      .from('attendance')
       .select('*')
-      .eq('email', email)
-      .maybeSingle();
+      .gte('created_at', startIso)
+      .lt('created_at', endIso)
+      .order('created_at', { ascending: false });
 
-    if (error) throw error;
-
-    // Compare against a fixed dummy hash even when the account doesn't
-    // exist, so responses take similar time either way (avoids leaking
-    // which emails are registered via response timing).
-    const hashToCompare = admin ? admin.password_hash : '$2a$10$CwTycUXWue0Thq9StjUM0uJ8Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5';
-    const passwordMatches = await bcrypt.compare(password, hashToCompare);
-
-    if (!admin || !passwordMatches) {
-      return NextResponse.json({ status: 'error', message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+    if (empErr || logErr) {
+      throw new Error((empErr && empErr.message) || (logErr && logErr.message));
     }
 
-    const token = createSessionToken({ id: admin.id, email: admin.email });
-    const response = NextResponse.json({ status: 'success', email: admin.email });
-    response.headers.set('Set-Cookie', sessionCookieHeader(token));
-    return response;
+    let inCount = 0;
+    let outCount = 0;
+    const uniqueStaffToday = new Set();
+
+    const logs = (logsRaw || []).map((row) => {
+      if (row.type === 'เข้างาน') inCount++;
+      if (row.type === 'ออกงาน') outCount++;
+      uniqueStaffToday.add(row.emp_id);
+
+      return {
+        time: new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Bangkok',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        }).format(new Date(row.created_at)),
+        empId: row.emp_id,
+        name: row.name,
+        department: row.department,
+        type: row.type,
+        location: row.loc_name,
+        distance: row.distance,
+        photo: row.photo_url
+      };
+    });
+
+    return NextResponse.json({
+      status: 'success',
+      totalEmployees: totalEmployees || 0,
+      todayActiveCount: uniqueStaffToday.size,
+      todayIn: inCount,
+      todayOut: outCount,
+      logs
+    });
   } catch (err) {
     return NextResponse.json(
       { status: 'error', message: 'ข้อผิดพลาดหลังบ้าน: ' + err.message },

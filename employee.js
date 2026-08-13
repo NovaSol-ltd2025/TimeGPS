@@ -32,7 +32,6 @@ export async function verifyEmployee(empId, pin) {
     status: 'success',
     empName: emp.name,
     department: emp.department,
-    branch: emp.branch || '',
     lastStatus
   };
 }

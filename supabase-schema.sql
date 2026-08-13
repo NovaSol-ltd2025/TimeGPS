@@ -4,7 +4,6 @@ create table if not exists employees (
   emp_id     text primary key,
   name       text not null,
   department text not null,
-  branch     text,                    -- สาขาที่สังกัด แยกจาก "แผนก" เพื่อให้ออกรายงานแยกรายสาขาได้
   pin        text not null,
   status     text not null default 'Active'
 );
@@ -23,7 +22,6 @@ create table if not exists attendance (
   emp_id      text not null,
   name        text not null,
   department  text not null,
-  branch      text,                    -- คัดลอกมาจาก employees.branch ตอนลงเวลา ใช้กรองรายงานรายสาขา
   type        text not null,           -- 'เข้างาน' or 'ออกงาน'
   loc_name    text,
   distance    integer,
@@ -35,7 +33,6 @@ create table if not exists attendance (
 
 create index if not exists attendance_emp_id_idx on attendance (emp_id);
 create index if not exists attendance_created_at_idx on attendance (created_at);
-create index if not exists attendance_branch_idx on attendance (branch);
 
 -- Admin accounts for the real login page (app/api/admin/login). Passwords
 -- are hashed with bcrypt in the Next.js API route before being stored here

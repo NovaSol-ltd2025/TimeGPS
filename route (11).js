@@ -1,207 +1,111 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
-import { formatBangkokDateTime } from '../../../lib/utils';
-import { isAdminAuthorized } from '../../../lib/adminSession';
+import { verifyEmployee } from '../../../lib/employee';
+import { distanceMeters, formatBangkokDateTime } from '../../../lib/utils';
 
 // Always run this route dynamically — never statically cache the response,
 // since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
 
-const MONTH_NAMES_TH = [
-  '',
-  'มกราคม',
-  'กุมภาพันธ์',
-  'มีนาคม',
-  'เมษายน',
-  'พฤษภาคม',
-  'มิถุนายน',
-  'กรกฎาคม',
-  'สิงหาคม',
-  'กันยายน',
-  'ตุลาคม',
-  'พฤศจิกายน',
-  'ธันวาคม'
-];
+const SELFIE_BUCKET = 'selfies';
 
-// Builds [rangeStartUtc, rangeEndUtc] for either:
-//  - a single Bangkok calendar day (reportType === 'daily', uses `date` = yyyy-mm-dd), or
-//  - a whole Bangkok calendar month (reportType === 'monthly', uses `month` + `year`)
-function buildDateRange({ reportType, date, month, year }) {
-  if (reportType === 'daily') {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      throw new Error('กรุณาระบุวันที่ให้ถูกต้อง (yyyy-mm-dd)');
-    }
-    const rangeStart = new Date(`${date}T00:00:00+07:00`);
-    const rangeEnd = new Date(rangeStart.getTime() + 24 * 60 * 60 * 1000);
-    const [y, m, d] = date.split('-');
-    return {
-      rangeStart,
-      rangeEnd,
-      label: `วันที่ ${d}/${m}/${Number(y) + 543}`
-    };
+async function uploadSelfie(base64Data, empId) {
+  const match = base64Data.match(/^data:(.*);base64,/);
+  const contentType = match ? match[1] : 'image/jpeg';
+  const pureBase64 = base64Data.replace(/^data:image\/[^;]+;base64,/, '');
+  const buffer = Buffer.from(pureBase64, 'base64');
+  const fileName = `Selfie_${empId}_${Date.now()}.jpg`;
+
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(SELFIE_BUCKET)
+    .upload(fileName, buffer, { contentType, upsert: false });
+
+  if (uploadError) {
+    throw new Error('ไม่สามารถบันทึกภาพถ่ายลง Supabase Storage: ' + uploadError.message);
   }
 
-  if (!month || !year || month < 1 || month > 12) {
-    throw new Error('กรุณาระบุปีและเดือนให้ถูกต้อง');
-  }
-  const monthStr = month.toString().padStart(2, '0');
-  const rangeStart = new Date(`${year}-${monthStr}-01T00:00:00+07:00`);
-  const nextMonth = month === 12 ? 1 : month + 1;
-  const nextMonthYear = month === 12 ? year + 1 : year;
-  const nextMonthStr = nextMonth.toString().padStart(2, '0');
-  const rangeEnd = new Date(`${nextMonthYear}-${nextMonthStr}-01T00:00:00+07:00`);
-  return {
-    rangeStart,
-    rangeEnd,
-    label: `${MONTH_NAMES_TH[month]} ${year + 543}`
-  };
+  const { data: publicUrlData } = supabaseAdmin.storage.from(SELFIE_BUCKET).getPublicUrl(fileName);
+  return publicUrlData.publicUrl;
 }
 
-export async function GET(request) {
-  if (!isAdminAuthorized(request)) {
-    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
-  }
+export async function POST(request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const reportType = (searchParams.get('reportType') || 'monthly').trim() === 'daily' ? 'daily' : 'monthly';
-    const month = parseInt(searchParams.get('month'), 10);
-    const year = parseInt(searchParams.get('year'), 10);
-    const date = (searchParams.get('date') || '').trim(); // yyyy-mm-dd, used when reportType === 'daily'
-    const deptFilter = (searchParams.get('department') || '').trim();
-    const branchFilter = (searchParams.get('branch') || '').trim();
+    const params = await request.json();
+    const empId = (params.empId || '').toString().trim();
+    const pin = (params.pin || '').toString().trim();
 
-    let rangeStart, rangeEnd, periodLabel;
-    try {
-      ({ rangeStart, rangeEnd, label: periodLabel } = buildDateRange({ reportType, date, month, year }));
-    } catch (rangeErr) {
-      return NextResponse.json({ status: 'error', message: rangeErr.message }, { status: 400 });
+    const verification = await verifyEmployee(empId, pin);
+    if (verification.status === 'error') {
+      return NextResponse.json({ status: 'error', message: verification.message });
     }
 
-    let query = supabaseAdmin
-      .from('attendance')
-      .select('*')
-      .gte('created_at', rangeStart.toISOString())
-      .lt('created_at', rangeEnd.toISOString());
+    const userLat = parseFloat(params.userLat);
+    const userLng = parseFloat(params.userLng);
+    const officeLat = parseFloat(params.officeLat);
+    const officeLng = parseFloat(params.officeLng);
+    const radius = parseFloat(params.radius) || 100;
 
-    if (deptFilter) {
-      query = query.eq('department', deptFilter);
-    }
-    if (branchFilter) {
-      query = query.eq('branch', branchFilter);
+    if ([userLat, userLng, officeLat, officeLng].some((n) => Number.isNaN(n))) {
+      return NextResponse.json({ status: 'error', message: 'พิกัด GPS ไม่ถูกต้อง' });
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-
-    // Group by employee -> Bangkok local date -> {inTime, outTime}
-    const byEmployee = {};
-
-    for (const row of data) {
-      const ts = new Date(row.created_at);
-      const dateStr = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Bangkok',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      }).format(ts); // yyyy-mm-dd
-
-      if (!byEmployee[row.emp_id]) {
-        byEmployee[row.emp_id] = {
-          empId: row.emp_id,
-          name: row.name,
-          department: row.department,
-          branch: row.branch || '',
-          days: {}
-        };
-      }
-      if (!byEmployee[row.emp_id].days[dateStr]) {
-        byEmployee[row.emp_id].days[dateStr] = { inTime: null, outTime: null };
-      }
-
-      const day = byEmployee[row.emp_id].days[dateStr];
-      if (row.type === 'เข้างาน') {
-        if (!day.inTime || ts < day.inTime) day.inTime = ts;
-      } else if (row.type === 'ออกงาน') {
-        if (!day.outTime || ts > day.outTime) day.outTime = ts;
-      }
-    }
-
-    const timeFmt = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Bangkok',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
-
-    const report = Object.keys(byEmployee).map((empId) => {
-      const emp = byEmployee[empId];
-      const dateKeys = Object.keys(emp.days).sort(); // yyyy-mm-dd sorts chronologically
-      let totalHours = 0;
-      let incompleteDays = 0;
-      let inCount = 0;
-      let outCount = 0;
-
-      // Per-day breakdown so admin can see exactly which dates were worked
-      // (e.g. to catch a clock-in mistakenly logged on a holiday) instead
-      // of only a total-day count. For a daily report this array will
-      // contain exactly one entry.
-      const dailyBreakdown = dateKeys.map((d) => {
-        const rec = emp.days[d];
-        if (rec.inTime) inCount++;
-        if (rec.outTime) outCount++;
-        const complete = !!(rec.inTime && rec.outTime && rec.outTime > rec.inTime);
-        let hours = null;
-        if (complete) {
-          hours = (rec.outTime.getTime() - rec.inTime.getTime()) / (1000 * 60 * 60);
-          totalHours += hours;
-          hours = Math.round(hours * 100) / 100;
-        } else {
-          incompleteDays++;
-        }
-        const [y, m, day] = d.split('-');
-        return {
-          date: d,
-          dateLabel: `${day}/${m}/${y}`,
-          inTime: rec.inTime ? timeFmt.format(rec.inTime) : null,
-          outTime: rec.outTime ? timeFmt.format(rec.outTime) : null,
-          hours,
-          complete
-        };
+    const dist = distanceMeters(officeLat, officeLng, userLat, userLng);
+    if (dist > radius) {
+      return NextResponse.json({
+        status: 'error',
+        message:
+          'บันทึกไม่สำเร็จ! ระยะพิกัด GPS ห่างเกินกว่าที่ได้รับอนุญาต (' +
+          Math.round(dist) +
+          ' ม. เกินขีดจำกัด ' +
+          radius +
+          ' ม.)'
       });
+    }
 
-      return {
-        empId: emp.empId,
-        name: emp.name,
-        department: emp.department,
-        branch: emp.branch,
-        totalDays: dateKeys.length,
-        totalHours: Math.round(totalHours * 100) / 100,
-        inCount,
-        outCount,
-        incompleteDays,
-        dailyBreakdown
-      };
+    if (!params.selfieBase64 || !params.selfieBase64.startsWith('data:image')) {
+      return NextResponse.json({
+        status: 'error',
+        message: 'บันทึกไม่สำเร็จ! ระบบต้องการภาพถ่ายเซลฟี่เรียลไทม์เพื่อสแกนยืนยันตัวตน'
+      });
+    }
+
+    const photoUrl = await uploadSelfie(params.selfieBase64, empId);
+    const typeText = params.type === 'IN' ? 'เข้างาน' : 'ออกงาน';
+
+    const { error: insertError } = await supabaseAdmin.from('attendance').insert({
+      emp_id: empId,
+      name: verification.empName,
+      department: verification.department,
+      type: typeText,
+      loc_name: params.locName,
+      distance: Math.round(dist),
+      lat: userLat,
+      lng: userLng,
+      photo_url: photoUrl,
+      note: 'ตรวจสอบผ่าน (GPS + PIN + สแกนกล้องสด)'
     });
 
-    report.sort((a, b) => {
-      if (a.branch !== b.branch) return a.branch < b.branch ? -1 : 1;
-      if (a.department !== b.department) return a.department < b.department ? -1 : 1;
-      return a.name < b.name ? -1 : 1;
-    });
+    if (insertError) {
+      return NextResponse.json(
+        { status: 'error', message: 'บันทึกฐานข้อมูลล้มเหลว: ' + insertError.message },
+        { status: 500 }
+      );
+    }
+
+    const timeStr = formatBangkokDateTime().split(' ')[1];
 
     return NextResponse.json({
       status: 'success',
-      reportType,
-      month: reportType === 'monthly' ? month : undefined,
-      year: reportType === 'monthly' ? year : undefined,
-      date: reportType === 'daily' ? date : undefined,
-      periodLabel,
-      monthLabel: periodLabel, // kept for backward compatibility with older frontends
-      department: deptFilter || 'ทุกแผนก',
-      branch: branchFilter || 'ทุกสาขา',
-      generatedAt: formatBangkokDateTime(),
-      rows: report
+      message:
+        '✅ บันทึกสำเร็จสิทธิ์สมบูรณ์!\n👤 ' +
+        verification.empName +
+        '\n🏢 สาขา: ' +
+        params.locName +
+        '\n⏰ เวลาเซิร์ฟเวอร์: ' +
+        timeStr +
+        '\n📍 ค่าระยะเบี่ยงเบน: ' +
+        Math.round(dist) +
+        ' เมตร'
     });
   } catch (err) {
     return NextResponse.json(
