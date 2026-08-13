@@ -665,7 +665,30 @@
       syncServerTime();
       setInterval(syncServerTime, 5 * 60 * 1000); // re-sync ทุก 5 นาที เผื่อนาฬิกาเครื่อง user เพี้ยน
       loadDashboardData();
+      initReportDateFilters();
     };
+
+    // ตั้งค่าเริ่มต้นของ dropdown ปี/เดือนในหน้ารายงาน/ตารางย้อนหลัง ให้ตรงกับ
+    // เดือนปัจจุบัน (เวลากรุงเทพฯ) เสมอ — ก่อนหน้านี้ #report-month ไม่มี
+    // option ไหนใส่ selected เลย ทำให้เบราว์เซอร์ default ไปที่ตัวเลือกแรก
+    // (มกราคม) ทุกครั้งที่โหลด/รีเฟรชหน้า ผลคือ Dashboard (ซึ่งดึง "วันนี้"
+    // เสมอ) กับตารางแสดงข้อมูล/รายงาน (ซึ่งอ่านค่าจาก dropdown นี้) แสดง
+    // คนละเดือนกัน ทำให้ดูเหมือนข้อมูลไม่ตรงกัน ทั้งที่ backend ปกติดี
+    function initReportDateFilters() {
+      const now = new Date(Date.now() + serverTimeOffsetMs);
+      const bangkokParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Bangkok',
+        year: 'numeric',
+        month: 'numeric'
+      }).formatToParts(now);
+      const map = {};
+      for (const p of bangkokParts) map[p.type] = p.value;
+
+      const yearSelect = document.getElementById('report-year');
+      const monthSelect = document.getElementById('report-month');
+      if (yearSelect && map.year) yearSelect.value = map.year;
+      if (monthSelect && map.month) monthSelect.value = String(parseInt(map.month, 10));
+    }
 
     function showToast(message, type = 'info') {
       const toast = document.getElementById('toast');
