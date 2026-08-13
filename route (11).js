@@ -1,0 +1,212 @@
+import { NextResponse } from 'next/server';
+import { supabaseAdmin } from '../../../lib/supabaseAdmin';
+import { formatBangkokDateTime } from '../../../lib/utils';
+import { isAdminAuthorized } from '../../../lib/adminSession';
+
+// Always run this route dynamically — never statically cache the response,
+// since attendance/employee data changes on every request.
+export const dynamic = 'force-dynamic';
+
+const MONTH_NAMES_TH = [
+  '',
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม'
+];
+
+// Builds [rangeStartUtc, rangeEndUtc] for either:
+//  - a single Bangkok calendar day (reportType === 'daily', uses `date` = yyyy-mm-dd), or
+//  - a whole Bangkok calendar month (reportType === 'monthly', uses `month` + `year`)
+function buildDateRange({ reportType, date, month, year }) {
+  if (reportType === 'daily') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error('กรุณาระบุวันที่ให้ถูกต้อง (yyyy-mm-dd)');
+    }
+    const rangeStart = new Date(`${date}T00:00:00+07:00`);
+    const rangeEnd = new Date(rangeStart.getTime() + 24 * 60 * 60 * 1000);
+    const [y, m, d] = date.split('-');
+    return {
+      rangeStart,
+      rangeEnd,
+      label: `วันที่ ${d}/${m}/${Number(y) + 543}`
+    };
+  }
+
+  if (!month || !year || month < 1 || month > 12) {
+    throw new Error('กรุณาระบุปีและเดือนให้ถูกต้อง');
+  }
+  const monthStr = month.toString().padStart(2, '0');
+  const rangeStart = new Date(`${year}-${monthStr}-01T00:00:00+07:00`);
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthYear = month === 12 ? year + 1 : year;
+  const nextMonthStr = nextMonth.toString().padStart(2, '0');
+  const rangeEnd = new Date(`${nextMonthYear}-${nextMonthStr}-01T00:00:00+07:00`);
+  return {
+    rangeStart,
+    rangeEnd,
+    label: `${MONTH_NAMES_TH[month]} ${year + 543}`
+  };
+}
+
+export async function GET(request) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
+  }
+  try {
+    const { searchParams } = new URL(request.url);
+    const reportType = (searchParams.get('reportType') || 'monthly').trim() === 'daily' ? 'daily' : 'monthly';
+    const month = parseInt(searchParams.get('month'), 10);
+    const year = parseInt(searchParams.get('year'), 10);
+    const date = (searchParams.get('date') || '').trim(); // yyyy-mm-dd, used when reportType === 'daily'
+    const deptFilter = (searchParams.get('department') || '').trim();
+    const branchFilter = (searchParams.get('branch') || '').trim();
+
+    let rangeStart, rangeEnd, periodLabel;
+    try {
+      ({ rangeStart, rangeEnd, label: periodLabel } = buildDateRange({ reportType, date, month, year }));
+    } catch (rangeErr) {
+      return NextResponse.json({ status: 'error', message: rangeErr.message }, { status: 400 });
+    }
+
+    let query = supabaseAdmin
+      .from('attendance')
+      .select('*')
+      .gte('created_at', rangeStart.toISOString())
+      .lt('created_at', rangeEnd.toISOString());
+
+    if (deptFilter) {
+      query = query.eq('department', deptFilter);
+    }
+    if (branchFilter) {
+      query = query.eq('branch', branchFilter);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    // Group by employee -> Bangkok local date -> {inTime, outTime}
+    const byEmployee = {};
+
+    for (const row of data) {
+      const ts = new Date(row.created_at);
+      const dateStr = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Bangkok',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).format(ts); // yyyy-mm-dd
+
+      if (!byEmployee[row.emp_id]) {
+        byEmployee[row.emp_id] = {
+          empId: row.emp_id,
+          name: row.name,
+          department: row.department,
+          branch: row.branch || '',
+          days: {}
+        };
+      }
+      if (!byEmployee[row.emp_id].days[dateStr]) {
+        byEmployee[row.emp_id].days[dateStr] = { inTime: null, outTime: null };
+      }
+
+      const day = byEmployee[row.emp_id].days[dateStr];
+      if (row.type === 'เข้างาน') {
+        if (!day.inTime || ts < day.inTime) day.inTime = ts;
+      } else if (row.type === 'ออกงาน') {
+        if (!day.outTime || ts > day.outTime) day.outTime = ts;
+      }
+    }
+
+    const timeFmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+
+    const report = Object.keys(byEmployee).map((empId) => {
+      const emp = byEmployee[empId];
+      const dateKeys = Object.keys(emp.days).sort(); // yyyy-mm-dd sorts chronologically
+      let totalHours = 0;
+      let incompleteDays = 0;
+      let inCount = 0;
+      let outCount = 0;
+
+      // Per-day breakdown so admin can see exactly which dates were worked
+      // (e.g. to catch a clock-in mistakenly logged on a holiday) instead
+      // of only a total-day count. For a daily report this array will
+      // contain exactly one entry.
+      const dailyBreakdown = dateKeys.map((d) => {
+        const rec = emp.days[d];
+        if (rec.inTime) inCount++;
+        if (rec.outTime) outCount++;
+        const complete = !!(rec.inTime && rec.outTime && rec.outTime > rec.inTime);
+        let hours = null;
+        if (complete) {
+          hours = (rec.outTime.getTime() - rec.inTime.getTime()) / (1000 * 60 * 60);
+          totalHours += hours;
+          hours = Math.round(hours * 100) / 100;
+        } else {
+          incompleteDays++;
+        }
+        const [y, m, day] = d.split('-');
+        return {
+          date: d,
+          dateLabel: `${day}/${m}/${y}`,
+          inTime: rec.inTime ? timeFmt.format(rec.inTime) : null,
+          outTime: rec.outTime ? timeFmt.format(rec.outTime) : null,
+          hours,
+          complete
+        };
+      });
+
+      return {
+        empId: emp.empId,
+        name: emp.name,
+        department: emp.department,
+        branch: emp.branch,
+        totalDays: dateKeys.length,
+        totalHours: Math.round(totalHours * 100) / 100,
+        inCount,
+        outCount,
+        incompleteDays,
+        dailyBreakdown
+      };
+    });
+
+    report.sort((a, b) => {
+      if (a.branch !== b.branch) return a.branch < b.branch ? -1 : 1;
+      if (a.department !== b.department) return a.department < b.department ? -1 : 1;
+      return a.name < b.name ? -1 : 1;
+    });
+
+    return NextResponse.json({
+      status: 'success',
+      reportType,
+      month: reportType === 'monthly' ? month : undefined,
+      year: reportType === 'monthly' ? year : undefined,
+      date: reportType === 'daily' ? date : undefined,
+      periodLabel,
+      monthLabel: periodLabel, // kept for backward compatibility with older frontends
+      department: deptFilter || 'ทุกแผนก',
+      branch: branchFilter || 'ทุกสาขา',
+      generatedAt: formatBangkokDateTime(),
+      rows: report
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { status: 'error', message: 'ข้อผิดพลาดหลังบ้าน: ' + err.message },
+      { status: 500 }
+    );
+  }
+}
