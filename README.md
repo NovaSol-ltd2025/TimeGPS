@@ -14,6 +14,24 @@ Originally a Google Apps Script attendance app, now running on:
   PIN — the API re-verifies the PIN on every request and only ever returns
   rows for that emp ID, so one worker can never see another's history
 
+## New: reports by branch, by day, or by month
+
+The reports panel in **จัดการระบบ** now lets you print/download a payroll-ready
+attendance report three ways, all showing the exact clock-in/clock-out
+**date and time** per employee per day:
+
+- **รายเดือน (monthly)** — every day worked in the chosen month, with a
+  subtotal per employee (days worked, total hours, incomplete-day count).
+- **รายวัน (daily)** — every employee's in/out time for one specific date.
+- **Branch filter** — a new "สาขา" field on each employee (separate from
+  "แผนก") lets you filter/print either report for a single branch, or
+  leave it blank to include every branch.
+
+If you already deployed this app before this feature existed, run
+`migration-add-branch.sql` once in the Supabase SQL Editor to add the new
+`branch` column to `employees` and `attendance` — then open each employee
+in **รายชื่อพนักงานในสังกัด → แก้ไข** and fill in their สาขา.
+
 ## Already done for you
 
 The Supabase project (`TimeGPSv1.0`, ref `dslhehnsvaeogrffwbpn`) already

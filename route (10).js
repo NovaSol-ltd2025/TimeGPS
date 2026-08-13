@@ -1,62 +1,74 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
-import { verifyEmployee } from '../../../lib/employee';
+import { isAdminAuthorized } from '../../../lib/adminSession';
 
 // Always run this route dynamically — never statically cache the response,
 // since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
 
-export async function POST(request) {
+export async function GET(request) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
+  }
   try {
-    const body = await request.json();
-    const empId = (body.empId || '').toString().trim();
-    const pin = (body.pin || '').toString().trim();
-
-    // Re-verifies empId + PIN on every call (same as clocking in/out) so
-    // this endpoint can only ever return the caller's own records — there
-    // is no empId parameter path that bypasses the PIN check.
-    const verification = await verifyEmployee(empId, pin);
-    if (verification.status === 'error') {
-      return NextResponse.json(verification);
-    }
-
     const { data, error } = await supabaseAdmin
-      .from('attendance')
-      .select('created_at, type, loc_name, distance')
-      .eq('emp_id', empId)
-      .order('created_at', { ascending: false })
-      .limit(100);
-
+      .from('locations')
+      .select('*')
+      .order('loc_name', { ascending: true });
     if (error) throw error;
 
-    const records = data.map((row) => {
-      const d = new Date(row.created_at);
-      return {
-        date: new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Asia/Bangkok',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        }).format(d),
-        time: new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Asia/Bangkok',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false
-        }).format(d),
-        type: row.type,
-        location: row.loc_name,
-        distance: row.distance
-      };
-    });
+    const list = data.map((l) => ({
+      locId: l.loc_id,
+      locName: l.loc_name,
+      lat: l.lat,
+      lng: l.lng,
+      radius: l.radius
+    }));
+    return NextResponse.json({ status: 'success', data: list });
+  } catch (err) {
+    return NextResponse.json(
+      { status: 'error', message: 'ข้อผิดพลาดหลังบ้าน: ' + err.message },
+      { status: 500 }
+    );
+  }
+}
 
-    return NextResponse.json({
-      status: 'success',
-      empName: verification.empName,
-      department: verification.department,
-      records
-    });
+export async function POST(request) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
+  }
+  try {
+    const body = await request.json();
+    const loc = body.data || {};
+    if (!loc.locName || loc.lat === undefined || loc.lng === undefined) {
+      return NextResponse.json({ status: 'error', message: 'กรุณากรอกข้อมูลพิกัดให้ครบ' });
+    }
+
+    const locId = loc.locId ? loc.locId.toString().trim() : 'LOC' + Date.now();
+    const lat = parseFloat(loc.lat);
+    const lng = parseFloat(loc.lng);
+    const radius = parseInt(loc.radius, 10) || 100;
+
+    const { data: existing } = await supabaseAdmin
+      .from('locations')
+      .select('loc_id')
+      .eq('loc_id', locId)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabaseAdmin
+        .from('locations')
+        .update({ loc_name: loc.locName, lat, lng, radius })
+        .eq('loc_id', locId);
+      if (error) throw error;
+      return NextResponse.json({ status: 'success', message: 'ปรับแก้พิกัดศูนย์กลางจุดทำงานแล้ว' });
+    } else {
+      const { error } = await supabaseAdmin
+        .from('locations')
+        .insert({ loc_id: locId, loc_name: loc.locName, lat, lng, radius });
+      if (error) throw error;
+      return NextResponse.json({ status: 'success', message: 'เพิ่มที่ตั้งจุดพิกัดลงงานสำเร็จ!' });
+    }
   } catch (err) {
     return NextResponse.json(
       { status: 'error', message: 'ข้อผิดพลาดหลังบ้าน: ' + err.message },
