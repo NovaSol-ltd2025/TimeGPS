@@ -784,6 +784,25 @@
       if (viewName !== 'attendance') stopCamera();
       if (viewName === 'admin') checkExistingAdminSession();
       if (viewName === 'dashboard') loadDashboardData();
+
+      updateDashboardAutoRefresh(viewName === 'dashboard');
+    }
+
+    // เดิม /api/dashboard ถูกเรียกแค่ตอนโหลดหน้าเว็บครั้งแรกกับตอนคลิกเข้าแท็บ
+    // "แดชบอร์ด" เท่านั้น — ถ้าจอเปิดค้างไว้ (เช่น ใช้เป็นจอ kiosk ติดหน้า
+    // ออฟฟิศ) ตัวเลขจะค้างอยู่ที่ค่าตอนโหลดครั้งแรก ไม่อัปเดตแม้จะมีคนสแกน
+    // เข้า-ออกงานเพิ่มหลังจากนั้น ทำให้ดูเหมือนข้อมูลไม่ครบ/ไม่ตรงกับความจริง
+    // ทั้งที่ backend ดึงข้อมูลถูกต้องอยู่แล้ว จึงเพิ่ม auto-refresh ทุก 15
+    // วินาที ระหว่างที่แท็บนี้เปิดอยู่ และหยุดโพลเมื่อสลับออกไปแท็บอื่น
+    let dashboardAutoRefreshId = null;
+    function updateDashboardAutoRefresh(isActive) {
+      if (dashboardAutoRefreshId) {
+        clearInterval(dashboardAutoRefreshId);
+        dashboardAutoRefreshId = null;
+      }
+      if (isActive) {
+        dashboardAutoRefreshId = setInterval(loadDashboardData, 15 * 1000);
+      }
     }
 
     // ผลต่าง (ms) ระหว่างเวลา server กับนาฬิกาเครื่อง user — เริ่มที่ 0 (เชื่อ
