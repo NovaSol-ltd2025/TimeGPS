@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 import { bangkokTodayRangeUtc } from '../../../lib/utils';
-import { isAdminAuthorized } from '../../../lib/adminSession';
 
 // Always run this route dynamically — never statically cache the response,
 // since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
 
-export async function GET(request) {
-  if (!isAdminAuthorized(request)) {
-    return NextResponse.json({ status: 'error', message: 'ไม่ได้รับอนุญาต' }, { status: 401 });
-  }
+// Intentionally NOT gated behind isAdminAuthorized: the "แดชบอร์ด" tab is a
+// public nav item any employee can open without logging in (same as
+// "ลงเวลา"/"ประวัติของฉัน"), e.g. left running on a lobby/kiosk screen. It
+// used to require an admin session, so every request from a non-admin
+// browser silently got a 401 and the UI (which has no error handling for a
+// failed fetch) stayed stuck on its initial zero values forever — looking
+// exactly like "data doesn't update in real time" even though the
+// auto-refresh polling underneath was firing correctly every 15s.
+export async function GET() {
   try {
     const [startIso, endIso] = bangkokTodayRangeUtc();
 
