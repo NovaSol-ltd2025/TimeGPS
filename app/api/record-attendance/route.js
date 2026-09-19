@@ -3,11 +3,30 @@ import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 import { verifyEmployee } from '../../../lib/employee';
 import { distanceMeters, formatBangkokDateTime } from '../../../lib/utils';
 
-// Always run this route dynamically — never statically cache the response,
-// since attendance/employee data changes on every request.
 export const dynamic = 'force-dynamic';
-
 const SELFIE_BUCKET = 'selfies';
+
+function normalize(value) {
+  return (value ?? '').toString().trim();
+}
+
+function parseTimeToMinutes(value, fallback = '08:30') {
+  const text = normalize(value) || fallback;
+  const match = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return parseTimeToMinutes(fallback, fallback);
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function determineStatus(type, now, workStart, workEnd) {
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = parseTimeToMinutes(workStart, '08:30');
+  const endMinutes = parseTimeToMinutes(workEnd, '17:30');
+
+  if (type === 'IN') {
+    return nowMinutes > startMinutes + 15 ? 'สาย' : 'ปกติ';
+  }
+  return nowMinutes < endMinutes - 15 ? 'ออกก่อนเวลา' : 'ปกติ';
+}
 
 async function uploadSelfie(base64Data, empId) {
   const match = base64Data.match(/^data:(.*);base64,/);
@@ -16,9 +35,10 @@ async function uploadSelfie(base64Data, empId) {
   const buffer = Buffer.from(pureBase64, 'base64');
   const fileName = `Selfie_${empId}_${Date.now()}.jpg`;
 
-  const { error: uploadError } = await supabaseAdmin.storage
-    .from(SELFIE_BUCKET)
-    .upload(fileName, buffer, { contentType, upsert: false });
+  const { error: uploadError } = await supabaseAdmin.storage.from(SELFIE_BUCKET).upload(fileName, buffer, {
+    contentType,
+    upsert: false
+  });
 
   if (uploadError) {
     throw new Error('ไม่สามารถบันทึกภาพถ่ายลง Supabase Storage: ' + uploadError.message);
@@ -31,10 +51,10 @@ async function uploadSelfie(base64Data, empId) {
 export async function POST(request) {
   try {
     const params = await request.json();
-    const empId = (params.empId || '').toString().trim();
-    const pin = (params.pin || '').toString().trim();
-
+    const empId = normalize(params.empId).toUpperCase();
+    const pin = normalize(params.pin);
     const verification = await verifyEmployee(empId, pin);
+
     if (verification.status === 'error') {
       return NextResponse.json({ status: 'error', message: verification.message });
     }
@@ -53,24 +73,22 @@ export async function POST(request) {
     if (dist > radius) {
       return NextResponse.json({
         status: 'error',
-        message:
-          'บันทึกไม่สำเร็จ! ระยะพิกัด GPS ห่างเกินกว่าที่ได้รับอนุญาต (' +
-          Math.round(dist) +
-          ' ม. เกินขีดจำกัด ' +
-          radius +
-          ' ม.)'
+        message: 'บันทึกไม่สำเร็จ! ระยะพิกัด GPS ห่างเกินกว่าที่ได้รับอนุญาต (' + Math.round(dist) + ' ม. เกินขีดจำกัด ' + radius + ' ม.)'
       });
     }
 
     if (!params.selfieBase64 || !params.selfieBase64.startsWith('data:image')) {
       return NextResponse.json({
         status: 'error',
-        message: 'บันทึกไม่สำเร็จ! ระบบต้องการภาพถ่ายเซลฟี่เรียลไทม์เพื่อสแกนยืนยันตัวตน'
+        message: 'บันทึกไม่สำเร็จ! ระบบต้องการภาพถ่ายเซลฟี่เรียลไทม์เพื่อยืนยันตัวตน' 
       });
     }
 
     const photoUrl = await uploadSelfie(params.selfieBase64, empId);
     const typeText = params.type === 'IN' ? 'เข้างาน' : 'ออกงาน';
+    const workStart = normalize(params.workStart) || '08:30';
+    const workEnd = normalize(params.workEnd) || '17:30';
+    const attendanceStatus = determineStatus(typeText === 'เข้างาน' ? 'IN' : 'OUT', new Date(), workStart, workEnd);
 
     const { error: insertError } = await supabaseAdmin.from('attendance').insert({
       emp_id: empId,
@@ -83,30 +101,22 @@ export async function POST(request) {
       lat: userLat,
       lng: userLng,
       photo_url: photoUrl,
-      note: 'ตรวจสอบผ่าน (GPS + PIN + สแกนกล้องสด)'
+      attendance_status: attendanceStatus,
+      note: 'ตรวจสอบผ่าน (GPS + PIN + สแกนกล้องสด) | ' + attendanceStatus
     });
 
     if (insertError) {
-      return NextResponse.json(
-        { status: 'error', message: 'บันทึกฐานข้อมูลล้มเหลว: ' + insertError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        status: 'error',
+        message: 'บันทึกฐานข้อมูลล้มเหลว: ' + insertError.message
+      }, { status: 500 });
     }
 
     const timeStr = formatBangkokDateTime().split(' ')[1];
 
     return NextResponse.json({
       status: 'success',
-      message:
-        '✅ บันทึกสำเร็จสิทธิ์สมบูรณ์!\n👤 ' +
-        verification.empName +
-        '\n🏢 สาขา: ' +
-        params.locName +
-        '\n⏰ เวลาเซิร์ฟเวอร์: ' +
-        timeStr +
-        '\n📍 ค่าระยะเบี่ยงเบน: ' +
-        Math.round(dist) +
-        ' เมตร'
+      message: '✅ บันทึกสำเร็จสิทธิ์สมบูรณ์!\n👤 ' + verification.empName + '\n🏢 สาขา: ' + params.locName + '\n⏰ เวลาเซิร์ฟเวอร์: ' + timeStr + '\n📍 ค่าระยะเบี่ยงเบน: ' + Math.round(dist) + ' เมตร\n📌 สถานะ: ' + attendanceStatus
     });
   } catch (err) {
     return NextResponse.json(
