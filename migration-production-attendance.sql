@@ -1,0 +1,12 @@
+alter table locations add column if not exists work_start time;
+alter table locations add column if not exists work_end time;
+alter table attendance add column if not exists attendance_status text not null default 'ปกติ';
+alter table attendance add column if not exists location_id text;
+alter table attendance add column if not exists edited_at timestamptz;
+alter table attendance add column if not exists edited_by text;
+create index if not exists attendance_location_id_idx on attendance (location_id);
+create index if not exists attendance_status_idx on attendance (attendance_status);
+create table if not exists attendance_audit_logs (id bigserial primary key, attendance_id bigint, action text not null, actor text not null, before_data jsonb, after_data jsonb, created_at timestamptz not null default now());
+create index if not exists attendance_audit_attendance_idx on attendance_audit_logs (attendance_id);
+create index if not exists attendance_audit_created_at_idx on attendance_audit_logs (created_at);
+alter table attendance_audit_logs enable row level security;
